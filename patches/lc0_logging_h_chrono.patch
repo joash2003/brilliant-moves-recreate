@@ -1,0 +1,12 @@
+diff --git a/src/utils/logging.h b/src/utils/logging.h
+index a9508de..a7e812c 100644
+--- a/src/utils/logging.h
++++ b/src/utils/logging.h
+@@ -27,6 +27,7 @@
+ 
+ #pragma once
+ 
++#include <chrono>
+ #include <deque>
+ #include <fstream>
+ #include <iomanip>

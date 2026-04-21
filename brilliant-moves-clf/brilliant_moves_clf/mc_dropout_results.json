@@ -1,0 +1,78 @@
+{
+  "per_move": [
+    {
+      "move": "game_of_the_century",
+      "mean": 0.9618587493896484,
+      "std": 0.019757896661758423,
+      "ci_lo": 0.9231332540512085,
+      "ci_hi": 1.0,
+      "prediction": 1,
+      "expected": 1,
+      "correct": 1
+    },
+    {
+      "move": "kasparov_rxd4",
+      "mean": 0.49662265181541443,
+      "std": 0.13639239966869354,
+      "ci_lo": 0.229293555021286,
+      "ci_hi": 0.7639517784118652,
+      "prediction": 0,
+      "expected": 1,
+      "correct": 0
+    },
+    {
+      "move": "morphy_qb8_sac",
+      "mean": 0.9996947050094604,
+      "std": 0.002403242513537407,
+      "ci_lo": 0.9949843287467957,
+      "ci_hi": 1.0,
+      "prediction": 1,
+      "expected": 1,
+      "correct": 1
+    },
+    {
+      "move": "opera_game_1e4",
+      "mean": 0.5391939878463745,
+      "std": 0.1832616776227951,
+      "ci_lo": 0.18000108003616333,
+      "ci_hi": 0.8983868956565857,
+      "prediction": 1,
+      "expected": 0,
+      "correct": 0
+    },
+    {
+      "move": "Vranesic_Stein",
+      "mean": 0.15728594362735748,
+      "std": 0.0665997564792633,
+      "ci_lo": 0.026750415563583374,
+      "ci_hi": 0.2878214716911316,
+      "prediction": 0,
+      "expected": 0,
+      "correct": 1
+    }
+  ],
+  "accuracy": {
+    "value": 0.6,
+    "ci_95": [
+      0.20000000298023224,
+      1.0
+    ],
+    "n_boot": 10000
+  },
+  "bug3_permutation": {
+    "before": [
+      0.88,
+      0.93,
+      0.91
+    ],
+    "after": [
+      0.97,
+      0.97,
+      0.97
+    ],
+    "mean_diff": 0.06333333333333328,
+    "p_value": 0.24776752232477675,
+    "n_perm": 100000
+  },
+  "n_mc_samples": 500
+}

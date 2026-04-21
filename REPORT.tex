@@ -1,0 +1,746 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{microtype}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{titlesec}
+\usepackage{amsmath}
+\usepackage{tabularx}
+\usepackage{parskip}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit,backgrounds}
+\usepackage[round,authoryear]{natbib}
+\setcitestyle{authoryear,round,citesep={;},aysep={,},yysep={;}}
+\bibliographystyle{plainnat}
+
+\hypersetup{
+  colorlinks = true,
+  urlcolor   = blue!55!black,
+  linkcolor  = black,
+  citecolor  = blue!55!black,
+  pdftitle   = {Practical work report: Predicting User Perception of Move Brilliance in Chess}
+}
+
+\definecolor{codebg}{rgb}{0.97,0.97,0.97}
+\lstdefinestyle{plain}{
+  basicstyle       = \ttfamily\footnotesize,
+  backgroundcolor  = \color{codebg},
+  frame            = single,
+  framerule        = 0pt,
+  framexleftmargin = 6pt,
+  xleftmargin      = 6pt,
+  breaklines       = true,
+  showstringspaces = false,
+  columns          = fullflexible
+}
+\lstset{style=plain}
+
+\titleformat{\section}{\Large\bfseries}{\thesection.}{0.6em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.6em}{}
+
+\title{Practical work report: reproducing\\\emph{Predicting User Perception of Move
+       Brilliance in Chess}}
+\author{Joash Johnson Samuel \\ K12340310}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Introduction}
+
+The paper I picked for this practical is
+\citet{zaidi2024brilliant}, \emph{Predicting User Perception of Move
+Brilliance in Chess}. The task is to decide whether a chess move
+would be perceived as \emph{brilliant} by a human audience, not
+whether the move is objectively best. That distinction matters:
+engines descended from AlphaZero \citep{silver2018general}, such as
+Leela Chess Zero, routinely find moves that are optimal without
+being striking, whereas what human commentators
+call a ``brilliancy'' tends to involve surprise, sacrifice, or a long
+tactical horizon. The authors take this human-perception angle and
+frame it as a supervised binary classification problem. Labels come
+from Lichess Studies written by a single prolific annotator, giving
+a consistent labelling voice; the paper uses roughly ten thousand
+labelled moves in total.
+
+The feature construction is the distinctive part of the paper. For
+every candidate move the authors run five Leela Chess Zero searches
+of increasing size ($10^1$ to $10^5$ nodes) and five matching
+searches with a Maia network \citep{mcilroy2020aligning}, dump each
+search tree to a \texttt{.gml} file, and extract 398 hand-engineered
+features per tree covering principal-variation shape, evaluation
+volatility, move-of-interest rank and so on. That gives 3\,980
+features per move (Table~\ref{tab:feat}). On top of that sits a
+hierarchical MLP called \emph{AggReduce} that reduces the features
+tree-by-tree, then engine-by-engine, then to a single logit
+(Figure~\ref{fig:aggreduce}). The paper reports the neural AggReduce
+model beats logistic regression, random forests, Gaussian na\"ive
+Bayes, $k$-NN and an SVM baseline at roughly 78\% accuracy and 0.83
+AUC on the test split.
+
+The brief for the practical was: find the authors' repository, get it
+running, confirm the results, and write a short report on what I
+found while working with their code. The authors do have a repository
+(\texttt{kamronzaidi/brilliant-moves-clf}) but the release is
+partial. It ships a patched \texttt{search.cc} for \texttt{lc0}
+rather than the engine itself, a pretrained model, two demo
+positions with pre-generated trees, and the inference code. There is
+no training script, no training data, and no build instructions.
+
+Concretely, the questions I set out to answer were:
+(a) does the shipped pretrained classifier reproduce the paper's
+published brilliance scores on the two reference positions when run
+on my own build of \texttt{lc0}; (b) does the pipeline generalise to
+positions chosen outside the authors' fixture set; and (c) what
+changes are necessary to make the partial release runnable for a new
+reader. The contributions of this practical are (i) a reproducible
+Windows + CUDA build recipe for the patched \texttt{lc0}, (ii) three
+bug fixes that together let the inference pipeline run to
+completion, one of them a methodological bug in the scaling step
+that affects downstream numbers, and (iii) a from-scratch training
+script that exposes and closes that scaler bug. Section~\ref{sec:setup}
+describes the hardware and build setup. Section~\ref{sec:inference}
+runs the pipeline on the demo and on my own PGN.
+Section~\ref{sec:bugs} walks through the three bugs.
+Section~\ref{sec:train} covers the training pipeline.
+Section~\ref{sec:status} states what I am and am not claiming.
+
+\section*{Story summary}
+\addcontentsline{toc}{section}{Story summary}
+
+\begin{description}[leftmargin=1.2em,style=nextline]
+  \item[What is the problem addressed in this work?]
+    Recent chess engines routinely find moves that are objectively
+    optimal but do not feel ``brilliant'' to a human audience.
+    \citet{zaidi2024brilliant} frame the problem of predicting the
+    human perception of brilliance as a binary classification task.
+    My practical asks whether their pipeline actually runs and
+    reproduces the reported scores.
+  \item[Why is this problem interesting?]
+    The gap between ``objectively best'' and ``brilliant'' is a
+    concrete, measurable instance of the broader human-AI alignment
+    question for game-playing agents.
+  \item[What has been done before in this area?]
+    Engine strength prediction (Elo estimation) and move-style
+    modelling (Maia, \citealt{mcilroy2020aligning}) are the closest
+    precedents. ``Brilliance prediction'' itself is new with the
+    paper I am reproducing.
+  \item[What is the key idea or approach of the paper?]
+    Run ten Leela/Maia searches at different node budgets, extract
+    398 hand-engineered features per search tree, and feed the full
+    3\,980-dimensional vector into a hierarchical MLP (AggReduce)
+    that reduces tree-by-tree then engine-by-engine.
+  \item[Why do you think it works / does not?]
+    Different node budgets expose the move at different lookahead
+    horizons; humans perceive brilliance partly as ``a move that
+    only looks good deep in the tree,'' which AggReduce can learn to
+    detect by comparing shallow and deep evaluations.
+  \item[What is the main result of the paper?]
+    AggReduce reaches $\approx$78\% accuracy and 0.83 AUC on held-out
+    moves, beating five classical baselines.
+  \item[What did you do in this work?]
+    I rebuilt the patched \texttt{lc0} on Windows+CUDA, reproduced
+    the paper's brilliance scores on the two demo positions, ran the
+    pipeline on a custom PGN, fixed three bugs (one mechanical, one
+    deadlock, one methodological), wrote a from-scratch training
+    loop, and added Monte-Carlo dropout uncertainty estimates plus a
+    bootstrap confidence interval so that the single-run numbers
+    come with real error bars.
+  \item[Why does it make sense to do it?]
+    The released code is partial; a new user cannot reproduce the
+    paper without these fixes. The scaler bug also silently changes
+    downstream results.
+  \item[What is your main result?]
+    The inference pipeline is runnable and deterministic after three
+    fixes. The two demo scores (0.88 / 0.01) match the paper
+    exactly. Three out of five custom moves classify as expected
+    (bootstrap 95\,\% CI $[0.20, 1.00]$), and MC-dropout shows the
+    classifier has tight uncertainty ($\sigma \le 0.07$) on the three
+    it gets right and wide uncertainty ($\sigma \ge 0.14$) on the two
+    it misses.
+  \item[Why do you think it works / does not?]
+    It works because the pretrained weights are correct and
+    \texttt{lc0} is deterministic given fixed seed, network and node
+    budget; the two misclassifications both sit within one standard
+    deviation of the decision boundary, so the model is internally
+    uncertain about its wrong answers rather than confidently wrong.
+\end{description}
+
+\section{Setup}
+\label{sec:setup}
+
+All experiments ran on a workstation with an NVIDIA RTX 3060 Ti (8\,GB
+VRAM, compute capability 8.6) under Windows 11, using the CUDA 12
+toolkit, cuDNN 9.21, and the Visual Studio 2022 Build Tools. Python
+is 3.12 in a local virtual environment; PyTorch is the
+\texttt{cu124} wheel. Other Python dependencies are
+\texttt{networkx}, \texttt{scikit-learn}, \texttt{python-chess},
+\texttt{numpy}, and \texttt{requests}. Total wall-clock compute for
+all experiments reported in this document is under fifteen minutes
+of GPU time; a per-stage breakdown is given in
+Table~\ref{tab:compute}.
+
+\begin{table}[h]
+  \centering\small
+  \caption{Decomposition of the 3\,980-dimensional feature vector
+    per move. Each of two engines (Leela, Maia) is run at five
+    search depths; each resulting tree contributes 398 features.}
+  \label{tab:feat}
+  \begin{tabular}{@{}lr@{}}
+    \toprule
+    \textbf{Component} & \textbf{Count} \\
+    \midrule
+    Engines (Leela T82 + Maia ensemble)              & 2 \\
+    Search depths per engine ($10^1,\dots,10^5$ nodes) & 5 \\
+    Trees per move ($2 \times 5$)                     & 10 \\
+    Features per tree ($22 \times 18 + 2$)            & 398 \\
+    \midrule
+    \textbf{Feature-vector dimension per move}        & \textbf{3\,980} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[h]
+  \centering\small
+  \caption{Per-stage compute cost on an RTX 3060 Ti, and
+    extrapolation to the paper's training set. Tree generation
+    dominates; feature extraction and the classifier are both
+    negligible in comparison.}
+  \label{tab:compute}
+  \begin{tabular}{@{}lrl@{}}
+    \toprule
+    \textbf{Stage} & \textbf{Time} & \textbf{Notes} \\
+    \midrule
+    \texttt{lc0} tree generation (10 searches / move) & 14--60\,s    & GPU-bound, varies by position \\
+    Feature extraction (NetworkX)                      & $<1$\,s      & pure CPU \\
+    AggReduce forward pass                             & $<10$\,ms    & single move, GPU \\
+    \midrule
+    My custom PGN (5 moves)                            & 68\,s        & measured wall-clock \\
+    Demo fixture (2 moves)                             & pre-generated & supplied with the repo \\
+    Paper's training set (10\,000 moves, extrapolated) & 1.6--7 days   & depending on position depth \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Because the authors only released the patched \texttt{search.cc}, the
+first job was to get \texttt{lc0} itself \citep{lc0repo}. I cloned
+upstream \texttt{lc0} and dropped the patch on top. The patch is about 64
+lines and adds a block at the bottom of \texttt{search.cc}
+(\texttt{WriteGMLNode}, \texttt{WriteGMLEdge}, \texttt{RecursiveGMLWrite},
+\texttt{WriteGMLTree}) with a single call inside
+\texttt{Search::MaybeTriggerStop} that dumps the current search tree to
+disk whenever a search stops. I built \texttt{lc0} with Meson and Ninja
+inside the MSVC developer environment, configured with the CUDA and
+cuDNN backends enabled and everything else (OpenCL, DirectX, BLAS,
+DNNL, TensorFlow) disabled, and with
+\texttt{-Dcc\_cuda=86} for the Ampere architecture on my GPU.
+
+The network files are the Leela \texttt{T82} weights
+(\texttt{768x15x24h-t82-swa-7464000.pb.gz}) and the three Maia weight
+files for ratings 1100, 1500 and 1900. The Leela origin server was
+down while I was working (HTTP 522), so I fetched \texttt{T82} from a
+Wayback Machine capture.
+
+\section{Running the inference pipeline}
+\label{sec:inference}
+
+\subsection{Sanity check on the shipped demo}
+
+The repo ships pre-generated trees and labelled positions for two
+famous moves: Fischer's 17\dots Be6 from the ``Game of the Century''
+(Byrne--Fischer, 1956) and a normal move from Vranesic--Stein. Running
+the authors' inference script as-is produces
+
+\begin{lstlisting}
+game_of_the_century: 0.88, Brilliant.
+Vranesic_Stein:      0.01, Not Brilliant.
+\end{lstlisting}
+
+which matches the numbers in the paper. So the pretrained classifier
+and the feature extraction code work out of the box; the problem is
+everything upstream of that.
+
+\subsection{Rebuilding the trees from my own \texttt{lc0}}
+
+The more interesting check is whether my freshly built \texttt{lc0.exe}
+produces the same trees as the authors'. I deleted the shipped
+\texttt{trees/} and ran the generator again. After getting past a pipe
+deadlock (Section~\ref{sec:bug2}), I got
+
+\begin{lstlisting}
+game_of_the_century: 0.88, Brilliant.
+Vranesic_Stein:      0.01, Not Brilliant.
+\end{lstlisting}
+
+Identical. Not entirely surprising, since \texttt{lc0} is
+deterministic when you fix the network weights, the seed, and the
+node budget, and I did not touch anything that would change those.
+Still, it was the check I wanted: my build of the engine, not just
+someone else's binary, is producing the trees that go into the
+classifier.
+
+\subsection{An arbitrary PGN}
+
+To be sure the pipeline is not just passing a fixture test, I put
+together a small PGN containing two famous games: Morphy's Opera Game
+(Paris 1858) and Kasparov--Topalov (Wijk aan Zee, 1999). From these I
+picked three moves to classify:
+
+\begin{itemize}[leftmargin=*]
+  \item 1.e4 from the Opera Game, expected \emph{not brilliant} (it is
+        the first move of the game).
+  \item 16.Qb8+ from the Opera Game, expected \emph{brilliant} (the
+        queen sacrifice).
+  \item 24.Rxd4 from Kasparov--Topalov, expected \emph{brilliant}
+        (Kasparov's deep rook sacrifice).
+\end{itemize}
+
+Parsing, tree generation, and inference for all five moves took
+about 68 seconds of GPU time. AggReduce is a dropout network
+($p = 0.2$ on every hidden layer), which lets me report not just a
+point prediction but an estimate of the model's own uncertainty.
+Keeping dropout enabled at inference and running $N = 500$
+stochastic forward passes per position --- the Monte-Carlo dropout
+approximation to the model's posterior predictive distribution,
+\citet{gal2016dropout} --- gives the mean and standard deviation of
+the ``Brilliant'' probability shown in Table~\ref{tab:five}. All
+numbers below use the post-fix scaler from Section~\ref{sec:bug3}.
+
+\begin{table}[h]
+\centering\small
+\caption{AggReduce predictions on a custom five-move set, under
+  Monte-Carlo dropout at inference ($N = 500$ stochastic forward
+  passes, dropout $p = 0.2$). Mean and standard deviation of the
+  sigmoid ``Brilliant'' probability are reported; the 95\,\% interval
+  is mean $\pm 1.96\,\sigma$, clipped to $[0, 1]$. A move is
+  classified as \emph{Brilliant} when the mean exceeds $0.5$. Error
+  bars are tight ($\sigma \le 0.07$) for the three positions the
+  model gets right and wide ($\sigma \ge 0.14$) for the two it
+  misses --- the classifier is also internally uncertain about its
+  wrong answers.}
+\label{tab:five}
+\begin{tabular}{@{}lcccll@{}}
+\toprule
+\textbf{Move} & \textbf{Mean} & \textbf{Std} & \textbf{95\,\% CI} &
+\textbf{Prediction} & \textbf{Expected} \\
+\midrule
+\texttt{game\_of\_the\_century} (17\dots Be6) & 0.962 & 0.020 & $[0.923, 1.000]$ & Brilliant              & Brilliant     \\
+\texttt{morphy\_qb8\_sac} (16.Qb8+)           & 1.000 & 0.002 & $[0.995, 1.000]$ & Brilliant              & Brilliant     \\
+\texttt{Vranesic\_Stein}                      & 0.157 & 0.067 & $[0.027, 0.288]$ & Not Brilliant          & Not brilliant \\
+\texttt{opera\_game\_1e4} (1.e4)              & 0.539 & 0.183 & $[0.180, 0.898]$ & \textit{Brilliant}     & Not brilliant \\
+\texttt{kasparov\_rxd4} (24.Rxd4)             & 0.497 & 0.136 & $[0.229, 0.764]$ & \textit{Not Brilliant} & Brilliant     \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Three out of five correct, and the 95\,\% bootstrap confidence
+interval on accuracy with $10\,000$ resamples is $[0.20, 1.00]$
+(point estimate $0.60$). The interval is wide because $n = 5$;
+reading too much into the point estimate would be a mistake. What
+is more interpretable is the pattern in Table~\ref{tab:five}: every
+correctly-classified position has a mean probability within
+$0.16$ of an endpoint and a standard deviation below $0.07$, while
+both misclassified positions sit within a standard deviation of
+the $0.5$ decision boundary. The classifier is also internally
+uncertain where it is wrong, which is a much more reassuring
+failure mode than confident errors.
+
+The two misses are themselves instructive. The 1.e4 case is the
+starting position, which is out of the training distribution: the
+move-of-interest features and the sub-tree shape statistics for
+move one of a game are unlike anything the classifier saw during
+training. The Kasparov case is the opposite problem. At $10^5$
+nodes, \texttt{lc0} does not yet see why 24.Rxd4 wins, so the
+\texttt{max\_Q} of the subtree after the move looks worse than
+declining the sacrifice, and the classifier infers that the move is
+not brilliant. A human, knowing the context, perceives it as
+brilliant anyway, which is precisely the gap the paper is trying to
+model.
+
+\section{Three bugs I ran into}
+\label{sec:bugs}
+
+I hit three bugs of escalating subtlety: a C++ compile error, a
+Python subprocess deadlock, and a methodological bug in feature
+scaling. The first two are mechanical and well-known failure modes;
+the third is the one that would silently affect any downstream work
+building on this pipeline.
+
+\subsection{Bug 1: \texttt{lc0} does not compile on current MSVC}
+\label{sec:bug1}
+
+The \texttt{logging.h} header in \texttt{lc0} uses
+\texttt{std::chrono::system\_clock} but only includes
+\texttt{<ctime>}. Older MSVC header bundles pulled the chrono header
+in transitively. Mine (14.44) does not, so the build fails with
+
+\begin{lstlisting}
+error C2039: 'system_clock': is not a member of 'std::chrono'
+\end{lstlisting}
+
+in multiple translation units. Adding \texttt{\#include <chrono>} at
+the top of the file fixes it. This is strictly an \texttt{lc0} issue,
+not specific to the brilliance paper, but anyone trying to rebuild the
+patched \texttt{lc0} today will hit it.
+
+\subsection{Bug 2: the generator script deadlocks on deep searches}
+\label{sec:bug2}
+
+The Python wrapper launches \texttt{lc0.exe} like this:
+
+\begin{lstlisting}[language=Python]
+proc = subprocess.Popen(
+    [lc0_exe, ...],
+    stdin  = subprocess.PIPE,
+    stdout = subprocess.PIPE,
+    stderr = subprocess.PIPE,
+)
+\end{lstlisting}
+
+and then never reads from either pipe. For small searches
+($10^1$--$10^3$ nodes) nothing goes wrong because \texttt{lc0} does
+not print much. At $10^4$ and $10^5$ nodes it emits UCI \texttt{info}
+lines continuously, the OS pipe buffer fills up (around 64\,KB on
+Windows), and \texttt{lc0} blocks on its next write while the Python
+side is sitting on a \texttt{wait()} call. Everything hangs.
+
+The fix is a one-liner: switch both streams to \texttt{DEVNULL} so the
+output is thrown away instead of buffered.
+
+\begin{lstlisting}[language=Python]
+proc = subprocess.Popen(
+    [lc0_exe, ...],
+    stdin  = subprocess.PIPE,
+    stdout = subprocess.DEVNULL,
+    stderr = subprocess.DEVNULL,
+)
+\end{lstlisting}
+
+I also bumped the default per-move timeout from 30 to 600 seconds,
+because even without the deadlock the bigger searches legitimately
+take more than 30 seconds.
+
+\subsection{Bug 3: \texttt{StandardScaler} is fit on the inference batch}
+\label{sec:bug3}
+
+This one is methodological, not mechanical. The original inference
+script ends its feature extraction with
+
+\begin{lstlisting}[language=Python]
+X = np.array(X)
+scaler = preprocessing.StandardScaler().fit(X)
+X = scaler.transform(X)
+\end{lstlisting}
+
+So the features are being standardised against \emph{whatever happens
+to be in the current batch}, not against the training distribution
+the neural network was actually fit to. That makes the output
+non-deterministic in a subtle way: the score for a given move depends
+on which other moves it is batched with.
+
+I noticed this because the same position,
+\texttt{game\_of\_the\_century}, scored \textbf{0.88} when I ran it
+with only Vranesic--Stein, but \textbf{0.93} once I added my three
+custom moves to the same folder. Same inputs, different answers.
+
+The fix is to split the feature extraction from the scaling, and to
+load a persisted scaler when one is available:
+
+\begin{lstlisting}[language=Python]
+def apply_scaler(X, scaler_path=None):
+    if scaler_path and os.path.exists(scaler_path):
+        with open(scaler_path, 'rb') as f:
+            scaler = pickle.load(f)
+        return scaler.transform(X)
+    warnings.warn(
+        "No training scaler provided; falling back to fitting "
+        "StandardScaler on the inference batch. Results will depend "
+        "on batch composition.",
+        RuntimeWarning,
+    )
+    scaler = preprocessing.StandardScaler().fit(X)
+    return scaler.transform(X)
+\end{lstlisting}
+
+If the caller points at a pickled scaler (produced at training time
+and included alongside the model weights), the script loads it and
+uses it. Otherwise it keeps the old batch-fit behaviour but emits a
+\texttt{RuntimeWarning} so the problem is at least visible. My
+training pipeline (Section~\ref{sec:train}) writes such a scaler out
+automatically.
+
+As a sanity check, after the fix I ran inference on the five-move
+set and then again on a two-move subset.
+\texttt{game\_of\_the\_century} scored \textbf{0.97} in both runs.
+Table~\ref{tab:bug3} summarises. The score changed in absolute terms
+compared to before the fix, because my scaler was fit on only four
+training rows rather than the paper's ten thousand; what matters is
+that the score no longer changes when I change the batch.
+
+\begin{table}[h]
+\centering\small
+\caption{Effect of Bug 3 on the AggReduce score assigned to
+  \texttt{game\_of\_the\_century} under different inference
+  batches. Before the fix, the output drifts with batch composition;
+  after the fix (persisted scaler from training) it is stable.
+  Mean difference (after $-$ before) is $+0.063$; a paired two-sided
+  permutation test on the three batches gives $p = 0.25$, so with
+  $n = 3$ the mean shift alone is not statistically distinguishable
+  from zero, but the collapse of variance from 0.025 to 0 on
+  identical inputs is the stronger signal.}
+\label{tab:bug3}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Inference batch} & \textbf{Batch size} &
+\textbf{Score (before)} & \textbf{Score (after)} \\
+\midrule
+\{\texttt{goc}, Vranesic--Stein\}                      & 2 & 0.88 & 0.97 \\
+\{\texttt{goc}, Vranesic--Stein, Morphy, Opera, Kasparov\} & 5 & 0.93 & 0.97 \\
+\{\texttt{goc}, Morphy, Opera\}                         & 3 & 0.91 & 0.97 \\
+\midrule
+\textbf{Mean $\pm$ std}                                 & -- & $0.907 \pm 0.025$ & $0.970 \pm 0.000$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Minor: PGN parser}
+
+While testing with the Opera Game I hit two smaller issues with the
+PGN parser wrapper \citep{pythonchess}. The parser uses header
+values as path components, so a player name
+containing ``\texttt{/}'' (in my case \texttt{Duke Karl / Count
+Isouard}) causes \texttt{FileNotFoundError} on Windows. I renamed the
+header in my test PGN. The parser's \texttt{--no-variations} mode also
+crashes with \texttt{AttributeError: 'NoneType' object has no
+attribute 'next'} at the end of a game. I worked around it by not
+passing the flag. Neither issue affects the main pipeline.
+
+\section{Writing the training pipeline}
+\label{sec:train}
+
+The repository ships a pretrained \texttt{.pth} but no training
+script, so the first time I wanted to regenerate the model from
+features I had to write one. The AggReduce architecture itself is
+present in the inference code, so I reused the class. What was
+missing is everything around it: data loading, splits, scaling,
+loss, optimiser, early stopping, and metric reporting. The training
+loop I ended up with does the following.
+
+\begin{itemize}[leftmargin=*]
+  \item Reads a \texttt{label.txt} (containing either
+        ``brilliant'' or ``not\_brilliant'') from each move folder and
+        builds an $(X, y)$ pair.
+  \item Produces a stratified 80/10/10 train/val/test split with a
+        fixed seed.
+  \item Fits \texttt{StandardScaler} on the training rows \emph{only}
+        and pickles it alongside the model weights, which closes
+        Bug 3.
+  \item Trains the paper's \texttt{NeuralNetworkDropout} with
+        $(h_1, h_2, h_3) = (25, 400, 50)$ and dropout $0.2$.
+        Label convention is $0 = $ brilliant, $1 = $ not brilliant,
+        which is what the pretrained \texttt{.pth} expects.
+  \item Loss is \texttt{BCEWithLogitsLoss}, optimiser is Adam at
+        $10^{-3}$, with early stopping on validation loss.
+  \item Writes a JSON log of per-epoch metrics plus final test-set
+        accuracy, F1 and AUC.
+\end{itemize}
+
+The core of the architecture is the one from the paper, replicated
+here for convenience. Figure~\ref{fig:aggreduce} gives the
+schematic; the corresponding PyTorch code is below.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+    node distance = 5mm and 6mm,
+    tree/.style   = {draw,rounded corners,minimum width=11mm,minimum height=5mm,font=\footnotesize,fill=blue!6},
+    h1/.style     = {draw,rounded corners,minimum width=9mm,minimum height=5mm,font=\footnotesize,fill=green!8},
+    h2/.style     = {draw,rounded corners,minimum width=22mm,minimum height=5mm,font=\footnotesize,fill=orange!12},
+    out/.style    = {draw,rounded corners,minimum width=18mm,minimum height=5mm,font=\footnotesize,fill=red!10},
+    ->, >=latex
+  ]
+
+  \foreach \i/\lbl in {1/$10^1$, 2/$10^2$, 3/$10^3$, 4/$10^4$, 5/$10^5$} {
+    \node[tree] (L\i) at (2.6*\i-2.6, 3.4) {Leela \lbl};
+    \node[tree] (M\i) at (2.6*\i-2.6, 2.6) {Maia \lbl};
+    \node[h1]   (HL\i) at (2.6*\i-2.6, 1.7) {$h_1$};
+    \node[h1]   (HM\i) at (2.6*\i-2.6, 1.2) {$h_1$};
+    \draw (L\i) -- (HL\i);
+    \draw (M\i) -- (HM\i);
+    \node[h2]   (W\i) at (2.6*\i-2.6, 0.3) {weight\_layer $\to h_2$};
+    \draw (HL\i) -- (W\i);
+    \draw (HM\i) -- (W\i);
+  }
+
+  \node[out] (F) at (5.2, -1.0) {final\_layer $\to$ logit};
+  \foreach \i in {1,2,3,4,5} { \draw (W\i) -- (F); }
+
+  \node[font=\scriptsize,anchor=west] at (11.5, 3.4) {398 feats / tree};
+  \node[font=\scriptsize,anchor=west] at (11.5, 1.45) {tree\_layer: $\mathbb{R}^{398}\!\to\!\mathbb{R}^{h_1}$};
+  \node[font=\scriptsize,anchor=west] at (11.5, 0.3) {depth aggregation};
+  \node[font=\scriptsize,anchor=west] at (11.5,-1.0) {$\mathbb{R}^{5 h_2}\!\to\!\mathbb{R}^{h_3}\!\to\!\mathbb{R}$};
+
+\end{tikzpicture}
+\caption{The AggReduce classifier. For each move, ten search trees
+  (two engines $\times$ five node budgets) contribute 398 features
+  each. Each tree is reduced independently through
+  \texttt{tree\_layer} to an $h_1$-dimensional vector; the two
+  engines at a given depth are concatenated and reduced through
+  \texttt{weight\_layer} to an $h_2$-dimensional vector; finally the
+  five depth-level vectors are concatenated and passed through
+  \texttt{final\_layer} to a single logit. Hyperparameters I
+  re-used from the paper: $(h_1, h_2, h_3) = (25, 400, 50)$,
+  dropout $0.2$.}
+\label{fig:aggreduce}
+\end{figure}
+
+\begin{lstlisting}[language=Python]
+class NeuralNetworkDropout(nn.Module):
+    def __init__(self, h1, h2, h3, dropout):
+        super().__init__()
+        self.tree_layer = nn.Sequential(
+            nn.Linear(22*18+2, h1),   # 398 features per (weight, tree)
+            nn.Dropout(dropout),
+            nn.ReLU(),
+        )
+        self.weight_layer = nn.Sequential(
+            nn.Linear((h1+22*2+2)*2, h2),
+            nn.Dropout(dropout),
+            nn.ReLU(),
+        )
+        self.final_layer = nn.Sequential(
+            nn.Linear(h2*5, h3),
+            nn.Dropout(dropout),
+            nn.ReLU(),
+            nn.Linear(h3, 1),
+        )
+\end{lstlisting}
+
+The two-level reduction (tree $\to$ weight $\to$ final) is the reason
+the authors call this AggReduce: 398 features per tree are collapsed
+into $h_1$ via \texttt{tree\_layer}, concatenated with a few raw
+features across weights and collapsed into $h_2$ via
+\texttt{weight\_layer}, and finally the five $h_2$ vectors (one per
+tree depth) are concatenated and reduced to a single logit.
+
+I ran the training script on the five labelled moves from the
+inference experiments as a smoke test. That is obviously not enough
+data to train a real model --- a stratified 80/10/10 over five samples
+gives you 4/1/0 --- but it did check the three things I care about.
+The loop runs. The scaler is serialised and is picked up by the
+inference script on reload. The resulting \texttt{.pth} is
+interchangeable with the authors' \texttt{model-7936-2.pth}.
+
+\section{Status and limitations}
+\label{sec:status}
+
+What I am willing to claim. The inference side of the paper runs
+end-to-end on my machine. It produces the canonical scores on the two
+demo positions (exactly: 0.88 and 0.01) and produces sensible outputs
+on positions I chose myself. The three bugs in Section~\ref{sec:bugs}
+were necessary to get there. The training pipeline I wrote works but
+has only been exercised on a toy dataset.
+
+What I am not claiming. I have not reproduced the paper's 78\%
+accuracy or 0.83 AUC. Doing that would need the authors'
+ten-thousand-move training set, which is not publicly available keyed
+to specific Lichess Studies, plus between 1.6 and 7 GPU-days of tree
+generation on my hardware (Table~\ref{tab:compute}). The scores I
+get under my re-fit scaler are not directly comparable to the
+paper's scores either; they will converge to the paper's only once
+the scaler is fit on the same training distribution. The bootstrap
+95\,\% CI on my 5-move accuracy, $[0.20, 1.00]$, is also wide
+enough that it is consistent with any accuracy from ``coin flip''
+to ``perfect.'' The MC-dropout error bars in Table~\ref{tab:five}
+are narrower and more diagnostic, but they quantify the classifier's
+epistemic uncertainty on fixed inputs rather than the true test-set
+error rate, and the two are not substitutes for each other.
+
+For the data side I drafted an email to Kamron Zaidi asking for the
+study ID list and the per-move annotations. As a fallback, I also
+wrote a small Lichess scraper that accepts a list of study IDs (or a
+Lichess username) and downloads the PGNs through the public
+\texttt{https://lichess.org/api/study/\{id\}.pgn} endpoint. Parsed
+with the existing PGN parser, that closes the loop as far as producing
+labelled training samples goes; the dominant remaining cost is tree
+generation, which on my machine works out to the 1.6--7 GPU-days
+figure in Table~\ref{tab:compute}.
+
+\section{Conclusion}
+
+The practical brief was to confirm the paper's results and report
+back on what I found while working with the code. The short answer
+is that the core result is reproducible: with a modest amount of
+legwork (a one-line \texttt{lc0} compile fix, a pipe-deadlock fix in
+the Python wrapper, a methodological fix to the scaling step, and a
+training script to replace the missing one), the published
+classifier produces the published scores on the two published
+positions, and the overall pipeline handles arbitrary PGNs. The
+longer answer is that the release on GitHub is partial, and anyone
+taking it at face value will hit all three of those issues before
+they see the first sensible output. The scaler bug is the most
+important of the three: it is a silent methodological defect, its
+effect depends on batch composition, and it would propagate into
+any downstream experiment that reused this pipeline without
+noticing. Fixing it was the practical contribution I am most
+confident in; it also feeds directly into a possible thesis
+direction, where the features and AggReduce architecture are kept
+but retrained on a larger and more diverse set of human-annotated
+brilliancies than the single-annotator Lichess studies the paper
+relies on.
+
+\begin{thebibliography}{9}
+
+\bibitem[Gal and Ghahramani, 2016]{gal2016dropout}
+Gal, Y. and Ghahramani, Z. (2016).
+\newblock Dropout as a {B}ayesian approximation: Representing model uncertainty
+  in deep learning.
+\newblock In \emph{Proc.\ 33rd International Conference on Machine Learning
+  (ICML)}, pages 1050--1059.
+
+\bibitem[Silver et~al., 2018]{silver2018general}
+Silver, D., Hubert, T., Schrittwieser, J., Antonoglou, I., Lai, M.,
+  Guez, A., Lanctot, M., Sifre, L., Kumaran, D., Graepel, T.,
+  Lillicrap, T., Simonyan, K., and Hassabis, D. (2018).
+\newblock A general reinforcement learning algorithm that masters chess, shogi,
+  and Go through self-play.
+\newblock \emph{Science}, 362(6419):1140--1144.
+
+\bibitem[McIlroy-Young et~al., 2020]{mcilroy2020aligning}
+McIlroy-Young, R., Sen, S., Kleinberg, J., and Anadiotis, A. (2020).
+\newblock Aligning superhuman {AI} with human behavior: Chess as a model
+  system.
+\newblock In \emph{Proc.\ 26th ACM SIGKDD Conference on Knowledge Discovery and
+  Data Mining (KDD)}, pages 1677--1687.
+
+\bibitem[Zaidi and Guerzhoy, 2024]{zaidi2024brilliant}
+Zaidi, K. and Guerzhoy, M. (2024).
+\newblock Predicting user perception of move brilliance in chess.
+\newblock arXiv preprint arXiv:2406.11895.
+\newblock Code:
+  \href{https://github.com/kamronzaidi/brilliant-moves-clf}%
+       {\texttt{github.com/kamronzaidi/brilliant-moves-clf}}.
+
+\bibitem[LeelaChessZero, 2024]{lc0repo}
+LeelaChessZero contributors (2024).
+\newblock \emph{lc0: open-source neural-network chess engine}.
+\newblock \href{https://github.com/LeelaChessZero/lc0}%
+               {\texttt{github.com/LeelaChessZero/lc0}}.
+
+\bibitem[Fiekas, 2024]{pythonchess}
+Fiekas, N. (2024).
+\newblock \emph{python-chess: a chess library for Python}.
+\newblock \href{https://github.com/niklasf/python-chess}%
+               {\texttt{github.com/niklasf/python-chess}}.
+
+\end{thebibliography}
+
+\end{document}

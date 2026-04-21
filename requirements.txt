@@ -1,0 +1,16 @@
+# Python dependencies for the brilliant-moves reproduction.
+# Install inside a Python 3.12 venv with:
+#   python -m pip install --upgrade pip
+#   python -m pip install -r requirements.txt
+#
+# torch: the +cu124 wheel is required for GPU acceleration. Install it from
+# the PyTorch index, e.g.:
+#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+# If you only have CPU, drop the "+cu124" suffix and install a CPU wheel.
+
+torch==2.6.0
+networkx==3.6.1
+scikit-learn==1.8.0
+chess==1.11.2          # aka python-chess
+numpy==2.4.4
+requests==2.33.1

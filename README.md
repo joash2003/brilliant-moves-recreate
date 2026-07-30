@@ -5,8 +5,9 @@ Perception of Move Brilliance in Chess* (Zaidi & Guerzhoy,
 arXiv:2406.11895).
 
 - **Author:** Joash Johnson Samuel, K12340310
-- **Report:** [`REPORT.tex`](REPORT.tex) (compile with pdflatex; see
-  also [`REPORT.md`](REPORT.md) for the Markdown source)
+- **Report:** [`REPORT.tex`](REPORT.tex) (compile with pdflatex). See
+  also [`REPORT.md`](REPORT.md), a longer engineering log with the
+  per-defect detail, validation matrix and file map.
 - **Everything the grader needs:** this README + the `REPORT.pdf` +
   the code in this repo
 
@@ -67,7 +68,6 @@ python inference_from_trees.py --moves_dir moves --scaler models\scaler.pkl
 | `...moves/` | 5 labelled moves (with `label.txt`) usable for train/infer. |
 | `...trees/` | 50 pregenerated `.gml` trees for those moves. |
 | `...mc_dropout_results.json` | Raw output of the MC-dropout analysis. |
-| `email-to-author-DRAFT.md` | Draft data request to the paper authors. |
 
 ## Common runs
 
@@ -140,11 +140,11 @@ Tables 3 and 4 of the report.
 
 ## Known limitations
 
-* Full numerical reproduction of the paper's 78 % accuracy / 0.83 AUC
-  requires the authors' 10 120-sample training set, which was not
+* Full numerical reproduction of the paper's 78.60 % test accuracy
+  requires the authors' 4,057-sample training set, which was not
   released.  We implement the pipeline end-to-end and demonstrate it
   runs; scaling to paper-size is purely a data-and-compute issue
-  (≈1 week of GPU time for tree generation on our hardware).
+  (0.7–2.8 GPU-days of tree generation on our hardware).
 * Paths in `parse_trees()` are hardcoded relative to CWD; run from
   `brilliant-moves-clf\brilliant_moves_clf\`.
 

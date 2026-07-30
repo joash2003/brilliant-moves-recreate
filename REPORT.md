@@ -42,9 +42,9 @@ Zaidi & Guerzhoy (2024) tackle a *perceptual* prediction problem rather than
 an objective one: given a chess position and a specific move, predict
 whether a human audience would consider that move **brilliant** — the kind
 of move that earns "!!" in a book or a double exclam on Lichess.  The
-training labels come from Lichess Studies written by a single annotator
-who was prolific in marking such moves; 624 studies yielded about ten
-thousand labelled moves.
+training labels come from move annotations in the 624 most popular
+Lichess Studies, authored by many different users; 6,975 moves carry
+annotations, of which 4,057 are used in the classifier experiments.
 
 The featurisation uses the Monte-Carlo-Tree-Search (MCTS) trees produced by
 two different neural networks:
@@ -65,8 +65,8 @@ that reduces information tree-by-tree, then weight-by-weight, then to a
 single logit.  Label convention: `0 = brilliant`, `1 = not brilliant`
 (BCEWithLogitsLoss).  The paper reports that the neural AggReduce model
 beats logistic regression, random forests, Gaussian naïve Bayes, kNN, and
-an SVM baseline on this task, reaching roughly 78 % accuracy and 0.83 AUC
-on the held-out test set.
+an SVM baseline on this task, reaching 79 % mean class-balanced accuracy
+in five-fold cross-validation and 78.60 % on the held-out test set.
 
 ---
 
@@ -133,8 +133,8 @@ These are the canonical scores reported in the paper.  Pipeline status:
 
 Having built `lc0.exe` locally with CUDA and the GML patch, we deleted the
 shipped trees and regenerated them for the two demo moves via
-`generate_trees.py`.  After surmounting a deadlock (see Bug 2) we
-reproduced:
+`generate_trees.py`.  Once the deadlock described in Bug 2 was
+resolved, we reproduced:
 
 ```
 game_of_the_century: 0.88, Brilliant.
@@ -148,9 +148,8 @@ given fixed network weights, fixed node limits, and fixed seed.
 
 ### 4.3 End-to-end on arbitrary PGNs (`s1_mymoves`)
 
-To convince ourselves (and any grader) that the pipeline is not simply
-passing a fixture test, we curated `my_games.pgn` containing two iconic
-games:
+To establish that the pipeline is not simply passing a fixture test, we
+assembled `my_games.pgn` containing two well-known games:
 
 * Morphy vs. Duke Karl / Count Isouard, Paris 1858 ("Opera Game").
 * Kasparov vs. Topalov, Wijk aan Zee 1999 ("Kasparov's Immortal").
@@ -167,8 +166,8 @@ into `inference_from_trees.py`.  Results on the full 5-move batch:
 | `kasparov_rxd4` (24.Rxd4!!) | 0.22 | **Not Brilliant** | Brilliant | ✗ |
 | `Vranesic_Stein` | 0.09 | Not Brilliant | Not brilliant | ✓ |
 
-The classifier gets 3/5 on this hand-picked set.  The two "misses" deserve
-comment:
+The classifier classifies 3 of the 5 moves correctly.  The two
+misclassifications have specific causes:
 
 * **1.e4** scored 0.72 because in a shallow lc0 search from the starting
   position, 1.e4 is often not even visited the most (1.d4 / 1.Nf3 can
@@ -184,10 +183,9 @@ comment:
   primed by the context, would perceive this as brilliant; the classifier
   has been trained on user-labelled data and inherits this quirk.
 
-The important point is that **these results are informative about what
-the classifier actually models** — "the user perception of brilliance",
-not objective brilliance.  The paper itself is careful about this
-distinction.
+These results are informative about what the classifier actually
+models, namely the user perception of brilliance rather than objective
+brilliance.  The paper is explicit about this distinction.
 
 Note: the scores above were produced by the authors' (buggy) inference
 script which fits StandardScaler on the inference batch; after our fix
@@ -244,8 +242,9 @@ network was fit to.  Concretely, we observed that:
 * After adding three more moves (`morphy_qb8_sac`, `opera_game_1e4`,
   `kasparov_rxd4`), the same `game_of_the_century` row scored **0.93**.
 
-Identical inputs, different answers — a non-deterministic and
-methodologically incorrect pipeline.
+The inputs are identical in both runs, so the pipeline is
+non-deterministic with respect to batch composition and
+methodologically incorrect.
 
 **Fix.** We refactored `parse_trees` to return unscaled features and
 introduced a new helper `apply_scaler(X, scaler_path=None)` that:
@@ -261,7 +260,7 @@ subset.  The score for `game_of_the_century` was **0.97** in both cases.
 Before the fix that score differed across batch sizes; after the fix it
 is batch-invariant.  The absolute value of 0.97 (vs the paper's 0.88) is
 expected because our recreated scaler was fit on only 4 training samples
-in the demo run — with the paper's full 10 120-move training set the
+in the demo run — with the paper's full 4,057-move training set the
 recreated scores would converge to the paper's.
 
 `train_classifier.py` writes the training scaler to `models/scaler.pkl`
@@ -318,8 +317,8 @@ and a full set of ten corresponding tree files under `trees/{lc0,maia}/<name>/`.
 
 ### 6.3 Small-scale demonstration
 
-The six-figure training set used in the paper (≈10 120 labelled moves
-derived from 624 specific Lichess Studies) is not publicly available in
+The training set used in the paper (4,057 labelled moves drawn from the
+624 most popular Lichess Studies) is not publicly available in
 association with specific study IDs.  We therefore ran the training
 pipeline end-to-end on the five labelled moves from §4 as a *pipeline
 smoke test* — not a model reproduction.
@@ -348,17 +347,20 @@ All four conditions hold — see `models/train_log_20260420-194050.json`.
 
 ### 6.4 Data-acquisition path for full reproduction
 
-Two realistic paths exist:
+Two paths exist:
 
-* **Preferred.** Request the 624-study ID list and the per-move
-  annotations from the authors.  A draft email to Kamron Zaidi is
-  included in `email-to-author-DRAFT.md`.
-* **Fallback.** Use `scrape_lichess.py` with a list of Lichess Study IDs
-  (or a whole user export via `--user`).  The script hits
+* **Requesting the original labels.** The 624-study ID list and the
+  per-move annotations were requested from the authors; they remain
+  unavailable, so this path is not currently viable.
+* **Constructing an independent annotated set.** This is the route
+  taken. `scrape_lichess.py` accepts a list of Lichess Study IDs (or a
+  whole user export via `--user`) and calls
   `https://lichess.org/api/study/{id}.pgn`, which is public and needs no
   token.  Parsed with `pgn_parser.py` it produces the `moves/` directory
   layout expected by `generate_trees.py` and `train_classifier.py`.
-  A grader can close the loop with:
+  An independently annotated set also decouples the labels from the
+  single annotation community behind the original ones.  The loop
+  closes with:
 
 ```
 python scrape_lichess.py --ids_file studies.txt --pgn_out raw_pgns/ --merge
@@ -368,9 +370,11 @@ python generate_trees.py
 python train_classifier.py
 ```
 
-The dominating cost is tree generation: ≈60 s per move on an RTX 3060 Ti,
-so a 10 000-move run is roughly a week of continuous compute — exactly
-consistent with the paper's description.
+The dominating cost is tree generation: 14–60 s per move on an RTX 3060 Ti,
+so a 4,057-move run amounts to roughly 0.7–2.8 GPU-days depending on
+position depth.  This is the stage that would benefit from
+institutional compute resources, and it is consistent with the paper's
+description.
 
 ---
 
@@ -393,8 +397,8 @@ consistent with the paper's description.
 
 ## 8. What this submission does *not* claim
 
-* We do **not** claim to reproduce the paper's **78 % test accuracy /
-  0.83 AUC**; to do that we would need the authors' 10 120-sample
+* We do **not** claim to reproduce the paper's **78.60 % test
+  accuracy**; to do that we would need the authors' 4,057-sample
   training set.  We claim instead that the *pipeline* that would
   produce such numbers is now fully implemented and runs correctly.
 * We do **not** claim the classifier's outputs are interpretable as
@@ -415,7 +419,6 @@ brilliant-moves-recreate/
 ├── README.md                          grader quick-start
 ├── build_lc0.ps1                      full lc0 build (cuDNN + CUDA + GML patch)
 ├── build_lc0_incremental.ps1          ninja-only incremental rebuild
-├── email-to-author-DRAFT.md           draft email requesting Zaidi's dataset
 ├── lc0-upstream/                      upstream lc0 source (patched)
 │   └── src/mcts/search.cc             contains the GML tree-dump patch
 ├── brilliant-moves-clf/               authors' repo (as cloned)

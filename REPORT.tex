@@ -14,6 +14,7 @@
 \usepackage{titlesec}
 \usepackage{amsmath}
 \usepackage{amssymb}
+\usepackage{graphicx}
 \usepackage{tabularx}
 \usepackage{parskip}
 \usepackage{tikz}
@@ -348,27 +349,33 @@ scaler described in Section~\ref{sec:bug3}.
 
 \begin{table}[h]
 \centering\small
-\caption{AggReduce predictions on a custom five-move set, under
-  Monte-Carlo dropout at inference ($N = 500$ stochastic forward
-  passes, dropout $p = 0.2$). Mean and standard deviation of the
-  sigmoid ``Brilliant'' probability are reported; the 95\,\% interval
-  is mean $\pm 1.96\,\sigma$, clipped to $[0, 1]$. A move is
-  classified as \emph{Brilliant} when the mean exceeds $0.5$. The
-  standard deviation is small ($\sigma \le 0.07$) for the three
-  positions classified correctly and large ($\sigma \ge 0.14$) for the
-  two classified incorrectly, indicating that the classifier is
-  internally uncertain where it errs.}
+\caption{AggReduce predictions on a custom five-move set. \emph{All
+  values are post-fix}, i.e.\ they use the persisted training scaler of
+  Section~\ref{sec:bug3}. The \emph{Det.} column is the deterministic
+  prediction with dropout disabled (\texttt{eval} mode); the remaining
+  columns are Monte-Carlo dropout at inference ($N = 500$ stochastic
+  forward passes, dropout $p = 0.2$), reporting the mean and standard
+  deviation of the sigmoid ``Brilliant'' probability, with the 95\,\%
+  interval as mean $\pm 1.96\,\sigma$ clipped to $[0, 1]$. The
+  deterministic and Monte-Carlo values agree to within $0.026$
+  throughout, so dropout sampling adds an uncertainty estimate without
+  displacing the point prediction. A move is classified as
+  \emph{Brilliant} when the prediction exceeds $0.5$. The standard
+  deviation is small ($\sigma \le 0.07$) for the three positions
+  classified correctly and large ($\sigma \ge 0.14$) for the two
+  classified incorrectly, indicating that the classifier is internally
+  uncertain where it errs.}
 \label{tab:five}
-\begin{tabular}{@{}lcccll@{}}
+\begin{tabular}{@{}lccccll@{}}
 \toprule
-\textbf{Move} & \textbf{Mean} & \textbf{Std} & \textbf{95\,\% CI} &
-\textbf{Prediction} & \textbf{Expected} \\
+\textbf{Move} & \textbf{Det.} & \textbf{Mean} & \textbf{Std} &
+\textbf{95\,\% CI} & \textbf{Prediction} & \textbf{Expected} \\
 \midrule
-\texttt{game\_of\_the\_century} (17\dots Be6) & 0.962 & 0.020 & $[0.923, 1.000]$ & Brilliant              & Brilliant     \\
-\texttt{morphy\_qb8\_sac} (16.Qb8+)           & 1.000 & 0.002 & $[0.995, 1.000]$ & Brilliant              & Brilliant     \\
-\texttt{Vranesic\_Stein}                      & 0.157 & 0.067 & $[0.027, 0.288]$ & Not Brilliant          & Not brilliant \\
-\texttt{opera\_game\_1e4} (1.e4)              & 0.539 & 0.183 & $[0.180, 0.898]$ & \textit{Brilliant}     & Not brilliant \\
-\texttt{kasparov\_rxd4} (24.Rxd4)             & 0.497 & 0.136 & $[0.229, 0.764]$ & \textit{Not Brilliant} & Brilliant     \\
+\texttt{game\_of\_the\_century} (17\dots Be6) & 0.969 & 0.962 & 0.020 & $[0.923, 1.000]$ & Brilliant              & Brilliant     \\
+\texttt{morphy\_qb8\_sac} (16.Qb8+)           & 1.000 & 1.000 & 0.002 & $[0.995, 1.000]$ & Brilliant              & Brilliant     \\
+\texttt{Vranesic\_Stein}                      & 0.149 & 0.157 & 0.067 & $[0.027, 0.288]$ & Not Brilliant          & Not brilliant \\
+\texttt{opera\_game\_1e4} (1.e4)              & 0.565 & 0.539 & 0.183 & $[0.180, 0.898]$ & \textit{Brilliant}     & Not brilliant \\
+\texttt{kasparov\_rxd4} (24.Rxd4)             & 0.498 & 0.497 & 0.136 & $[0.229, 0.764]$ & \textit{Not Brilliant} & Brilliant     \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -385,17 +392,82 @@ $0.5$ decision boundary. The classifier is therefore internally
 uncertain where it errs, which is a less damaging failure mode than
 confident error.
 
-The two misclassifications admit specific explanations. The 1.e4 case
-is the starting position and lies outside the training distribution:
-the move-of-interest features and the subtree shape statistics for the
-first move of a game differ from anything present during training. The
-Kasparov case is the converse. At $10^5$ nodes \texttt{lc0} does not
-yet resolve why 24.Rxd4 wins, so the \texttt{max\_Q} of the subtree
-following the move appears worse than that of declining the sacrifice,
-and the classifier concludes that the move is not brilliant. A human
-observer, who has the surrounding context, perceives it as brilliant
-regardless. This is precisely the discrepancy the paper sets out to
-model.
+The two misclassifications have distinct causes. The 1.e4 case is the
+starting position and lies outside the training distribution: the
+move-of-interest features and the subtree shape statistics for the
+first move of a game differ from anything present during training.
+
+The Kasparov case does not match the explanation I first assumed, and
+reading the trees directly is instructive
+(Table~\ref{tab:kasparov}). \texttt{lc0} does locate 24.Rxd4: from
+$10^4$ nodes onwards it is the highest-$Q$ child of the root, and at
+$10^5$ it absorbs 42\,406 of the visits, so the move is not missing
+from the search. What is missing is a decisive evaluation of it. Its
+recorded $Q$ climbs monotonically with the budget, from $-0.508$ at
+$10^2$ to $-0.128$ at $10^5$, but remains close to zero, whereas the
+correctly classified \texttt{morphy\_qb8\_sac} sits at $Q = 1.000$ at
+every budget. Maia never ranks 24.Rxd4 best once it has actually
+visited it, and gives it 21 visits out of $10^5$.
+
+The move therefore presents only part of the profile the paper
+associates with brilliance: strong for the superhuman engine and
+undiscovered by the human-aligned one, but without the decisive
+evaluation that the confidently classified examples carry. A prediction
+near the decision boundary is consistent with that mixture. Two
+caveats apply to reading the exact distance from $0.5$. It is not an
+artefact of dropout sampling, since the deterministic prediction in
+Table~\ref{tab:five} is $0.498$. It is, however, sensitive to the
+scaler: under the original batch-fitted scaling the same move scores
+$0.217$, and my persisted scaler is fitted on only four rows
+(Section~\ref{sec:bug3}), so the absolute value carries little weight
+either way.
+
+Whether a larger node budget would move the prediction to
+\emph{Brilliant} is a testable question. The monotone trend in
+Table~\ref{tab:kasparov} suggests that \texttt{lc0}'s evaluation of
+24.Rxd4 may become decisive at $10^6$ or $10^7$ nodes while Maia
+remains unlikely to discover it, which is exactly the profile of the
+confidently classified brilliancies. The classifier, however, consumes
+exactly five node budgets: a sixth cannot be appended without
+retraining, and shifting the ladder to $10^2$--$10^6$ would feed the
+pretrained weights inputs outside their training distribution. The
+engine-level half of the question, whether $Q$ becomes decisive at
+larger budgets, is separable from the classifier and answerable with a
+single deeper search; I leave it for the compute phase of the
+follow-up work.
+
+Table~\ref{tab:kasparov} also exposes a smaller encoding problem. At
+$10^3$ nodes the ``is the move best'' indicator is true for Maia only
+because the move and the best alternative both carry the default
+$Q = 0$ at zero visits. The flag conflates ``ranked first'' with
+``never examined'', in the same way that the $-1$ sentinel conflates a
+very low evaluation with a missing subtree.
+
+\begin{table}[h]
+\centering\small
+\caption{What the search trees actually contain for
+  \texttt{kasparov\_rxd4} (24.Rxd4, UCI \texttt{d1d4}), by engine and
+  node budget. \textbf{Best} records whether the move is the
+  highest-$Q$ child of the root. \texttt{lc0} makes it the best move
+  from $10^4$ onwards and concentrates its search on it; Maia ranks it
+  best only at $10^3$, where the move and the best alternative are both
+  unvisited and default to $Q = 0$.}
+\label{tab:kasparov}
+\begin{tabular}{@{}lrcrrcr@{}}
+\toprule
+& \multicolumn{3}{c}{\textbf{Lc0}} & \multicolumn{3}{c}{\textbf{Maia}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+\textbf{Budget} & $Q$ & \textbf{Best} & \textbf{Visits}
+                & $Q$ & \textbf{Best} & \textbf{Visits} \\
+\midrule
+$10^1$ & \multicolumn{3}{c}{not in tree} & \multicolumn{3}{c}{not in tree} \\
+$10^2$ & $-0.508$ & no  & 2       & $0.000$  & no  & 0  \\
+$10^3$ & $-0.246$ & no  & 15      & $0.000$  & yes & 0  \\
+$10^4$ & $-0.154$ & yes & 4\,276  & $-0.167$ & no  & 7  \\
+$10^5$ & $-0.128$ & yes & 42\,406 & $-0.280$ & no  & 21 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \section{Bugs encountered}
 \label{sec:bugs}
@@ -594,36 +666,37 @@ PyTorch definition follows.
 
 \begin{figure}[h]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
-    node distance = 5mm and 6mm,
-    tree/.style   = {draw,rounded corners,minimum width=11mm,minimum height=5mm,font=\footnotesize,fill=blue!6},
-    h1/.style     = {draw,rounded corners,minimum width=9mm,minimum height=5mm,font=\footnotesize,fill=green!8},
-    h2/.style     = {draw,rounded corners,minimum width=22mm,minimum height=5mm,font=\footnotesize,fill=orange!12},
-    outbox/.style = {draw,rounded corners,minimum width=18mm,minimum height=5mm,font=\footnotesize,fill=red!10},
+    eng/.style    = {draw,rounded corners,minimum width=12mm,minimum height=5mm,font=\footnotesize,fill=blue!6},
+    h1/.style     = {draw,rounded corners,minimum width=12mm,minimum height=5mm,font=\footnotesize,fill=green!8},
+    h2/.style     = {draw,rounded corners,minimum width=26mm,minimum height=5mm,font=\footnotesize,fill=orange!12},
+    outbox/.style = {draw,rounded corners,minimum width=30mm,minimum height=5mm,font=\footnotesize,fill=red!10},
     ->, >=latex
   ]
 
   \foreach \i/\lbl in {1/$10^1$, 2/$10^2$, 3/$10^3$, 4/$10^4$, 5/$10^5$} {
-    \node[tree] (L\i) at (2.6*\i-2.6, 3.4) {Leela \lbl};
-    \node[tree] (M\i) at (2.6*\i-2.6, 2.6) {Maia \lbl};
-    \node[h1]   (HL\i) at (2.6*\i-2.6, 1.7) {$h_1$};
-    \node[h1]   (HM\i) at (2.6*\i-2.6, 1.2) {$h_1$};
-    \draw (L\i) -- (HL\i);
-    \draw (M\i) -- (HM\i);
-    \node[h2]   (W\i) at (2.6*\i-2.6, 0.3) {$h_2$};
+    \node[font=\footnotesize] (B\i) at (3*\i-3,      4.0) {\lbl\ nodes};
+    \node[eng] (L\i)  at (3*\i-3-0.7, 3.2) {Lc0};
+    \node[eng] (M\i)  at (3*\i-3+0.7, 3.2) {Maia};
+    \node[h1]  (HL\i) at (3*\i-3-0.7, 2.2) {$h_1$};
+    \node[h1]  (HM\i) at (3*\i-3+0.7, 2.2) {$h_1$};
+    \node[h2]  (W\i)  at (3*\i-3,     1.1) {$h_2$};
+    \draw (L\i)  -- (HL\i);
+    \draw (M\i)  -- (HM\i);
     \draw (HL\i) -- (W\i);
     \draw (HM\i) -- (W\i);
   }
 
-  \node[outbox] (F) at (5.2, -1.0) {final\_layer $\to$ logit};
+  \node[outbox] (F) at (6, -0.2) {final\_layer $\to$ logit};
   \foreach \i in {1,2,3,4,5} { \draw (W\i) -- (F); }
 
-  \node[font=\scriptsize,anchor=west] at (11.5, 3.4) {398 feats / tree};
-  \node[font=\scriptsize,anchor=west] at (11.5, 1.45) {tree\_layer: $\mathbb{R}^{398}\!\to\!\mathbb{R}^{h_1}$};
-  \node[font=\scriptsize,anchor=west] at (11.5, 0.3) {weight\_layer: $\mathbb{R}^{2(h_1+46)}\!\to\!\mathbb{R}^{h_2}$};
-  \node[font=\scriptsize,anchor=west] at (11.5,-1.0) {$\mathbb{R}^{5 h_2}\!\to\!\mathbb{R}^{h_3}\!\to\!\mathbb{R}$};
+  \node[font=\scriptsize,anchor=west] at (13.8, 3.2) {398 features per tree};
+  \node[font=\scriptsize,anchor=west] at (13.8, 2.2) {tree\_layer: $\mathbb{R}^{398}\!\to\!\mathbb{R}^{h_1}$};
+  \node[font=\scriptsize,anchor=west] at (13.8, 1.1) {weight\_layer: $\mathbb{R}^{2(h_1+46)}\!\to\!\mathbb{R}^{h_2}$};
+  \node[font=\scriptsize,anchor=west] at (13.8,-0.2) {final\_layer: $\mathbb{R}^{5h_2}\!\to\!\mathbb{R}^{h_3}\!\to\!\mathbb{R}$};
 
-\end{tikzpicture}
+\end{tikzpicture}}
 \caption{The AggReduce classifier. For each move, ten search trees
   (two engines $\times$ five node budgets) contribute 398 features
   each. Each tree is reduced independently through

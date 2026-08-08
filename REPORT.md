@@ -176,12 +176,21 @@ misclassifications have specific causes:
   sub-tree shape statistics exit their normal range entirely at the initial
   position.  The network's training distribution excludes openings — a
   genuine out-of-distribution failure, and arguably expected behaviour.
-* **Kasparov 24.Rxd4** is an unusually deep tactical sacrifice; at the
-  search budgets used (≤10⁵ nodes), lc0 without the sacrifice sub-tree
-  does not recognise it as winning, so the `max_Q` features after the
-  candidate move look *worse* than declining the sac.  A real human,
-  primed by the context, would perceive this as brilliant; the classifier
-  has been trained on user-labelled data and inherits this quirk.
+* **Kasparov 24.Rxd4**: reading the trees directly shows lc0 *does*
+  find the move — it is the highest-Q child of the root from 10⁴ nodes
+  onwards and absorbs 42,406 of the 10⁵ visits — but its evaluation
+  never becomes decisive (Q climbs monotonically from −0.508 at 10² to
+  only −0.128 at 10⁵, versus Q = 1.000 at every budget for the Morphy
+  sacrifice).  Maia never ranks it best once it has actually visited it
+  (21 visits at 10⁵).  The feature vector therefore carries only part
+  of the brilliance profile — strong-for-lc0 and undiscovered-by-Maia,
+  but without a decisive evaluation — which is consistent with a
+  prediction near the 0.5 boundary (deterministic score 0.498) rather
+  than a confident "not brilliant".  Side finding: at 10³ Maia ranks
+  the move "best" only because the move and the best alternative both
+  sit at the default Q = 0 with zero visits — the best-move flag
+  conflates "ranked first" with "never examined", the same defect class
+  as the −1 sentinel.
 
 These results are informative about what the classifier actually
 models, namely the user perception of brilliance rather than objective

@@ -426,18 +426,25 @@ $0.217$, and my persisted scaler is fitted on only four rows
 either way.
 
 Whether a larger node budget would move the prediction to
-\emph{Brilliant} is a testable question. The monotone trend in
-Table~\ref{tab:kasparov} suggests that \texttt{lc0}'s evaluation of
-24.Rxd4 may become decisive at $10^6$ or $10^7$ nodes while Maia
-remains unlikely to discover it, which is exactly the profile of the
-confidently classified brilliancies. The classifier, however, consumes
-exactly five node budgets: a sixth cannot be appended without
-retraining, and shifting the ladder to $10^2$--$10^6$ would feed the
-pretrained weights inputs outside their training distribution. The
-engine-level half of the question, whether $Q$ becomes decisive at
-larger budgets, is separable from the classifier and answerable with a
-single deeper search; I leave it for the compute phase of the
-follow-up work.
+\emph{Brilliant} splits into two questions. The engine-level half is
+answerable with a single deeper search, which I ran on institute
+hardware (an independent Linux build of \texttt{lc0} with the same
+T82 weights, smart pruning disabled so that the full budget is spent;
+one GV100, roughly 20 GPU-minutes in total). At $10^5$, $10^6$ and
+$10^7$ nodes the $Q$ of 24.Rxd4 is $-0.098$, $-0.086$ and $-0.074$,
+with the predicted draw share rising to $0.77$; the values differ
+slightly from Table~\ref{tab:kasparov} because early stopping is
+disabled. The evaluation converges towards a balanced, drawish
+assessment rather than becoming decisive, and each tenfold budget
+increase buys less. This is consistent with published analysis
+suggesting the sacrifice was objectively defensible, and it sharpens
+the premise of the paper on its own showcase example: the perceived
+brilliance of this move is not recoverable from the evaluation at any
+feasible depth. The classifier-level half of the question remains
+open for a structural reason: the network consumes exactly five node
+budgets, so a sixth cannot be appended without retraining, and
+shifting the ladder to $10^2$--$10^6$ would feed the pretrained
+weights inputs outside their training distribution.
 
 Table~\ref{tab:kasparov} also exposes a smaller encoding problem. At
 $10^3$ nodes the ``is the move best'' indicator is true for Maia only

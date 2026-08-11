@@ -190,7 +190,12 @@ misclassifications have specific causes:
   the move "best" only because the move and the best alternative both
   sit at the default Q = 0 with zero visits — the best-move flag
   conflates "ranked first" with "never examined", the same defect class
-  as the −1 sentinel.
+  as the −1 sentinel.  Follow-up on institute hardware: an independent
+  Linux lc0 build with the same T82 weights (smart pruning off) gives
+  Q = −0.098 / −0.086 / −0.074 at 10⁵ / 10⁶ / 10⁷ nodes with the draw
+  share rising to 0.77 — the evaluation converges to balanced/drawish
+  instead of becoming decisive, so the brilliance signal is not
+  recoverable from the evaluation at feasible depth.
 
 These results are informative about what the classifier actually
 models, namely the user perception of brilliance rather than objective
@@ -381,9 +386,9 @@ python train_classifier.py
 
 The dominating cost is tree generation: 14–60 s per move on an RTX 3060 Ti,
 so a 4,057-move run amounts to roughly 0.7–2.8 GPU-days depending on
-position depth.  This is the stage that would benefit from
-institutional compute resources, and it is consistent with the paper's
-description.
+position depth.  This stage is now covered by institute server access,
+first validated by the 10⁵–10⁷ deep-search run described in §4.3, and
+the estimate is consistent with the paper's description.
 
 ---
 

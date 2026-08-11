@@ -54,7 +54,7 @@
 \title{Practical work report: reproducing\\\emph{Predicting User Perception of Move
        Brilliance in Chess}}
 \author{Joash Johnson Samuel \\ K12340310}
-\date{July 29, 2026}
+\date{August 11, 2026}
 
 \begin{document}
 \maketitle
@@ -131,7 +131,10 @@ dropout uncertainty estimates for the classifier's predictions.
     five-move accuracy is $[0.20, 1.00]$, and Monte-Carlo dropout
     shows narrow uncertainty ($\sigma \le 0.07$) on the three correct
     predictions and wide uncertainty ($\sigma \ge 0.14$) on the two
-    incorrect ones.
+    incorrect ones. A follow-up search at up to $10^7$ nodes shows the
+    engine's evaluation of the misclassified Kasparov sacrifice
+    converging to a balanced, drawish value rather than becoming
+    decisive.
   \item[How did the analyses answer the central question?]
     The inference side of the paper is reproducible and deterministic
     once the three defects are fixed. The training side cannot be
@@ -212,15 +215,18 @@ Section~\ref{sec:status} delimits the claims made.
 \section{Setup}
 \label{sec:setup}
 
-All experiments were run on a workstation with an NVIDIA RTX 3060 Ti
-(8\,GB VRAM, compute capability 8.6) under Windows 11, using the CUDA
-12 toolkit, cuDNN 9.21 and the Visual Studio 2022 Build Tools. Python
-is 3.12 in a local virtual environment and PyTorch is the
-\texttt{cu124} wheel. The remaining Python dependencies are
-\texttt{networkx}, \texttt{scikit-learn}, \texttt{python-chess},
-\texttt{numpy} and \texttt{requests}. Total wall-clock compute for all
-experiments reported in this document is below fifteen minutes of GPU
-time; a per-stage breakdown is given in Table~\ref{tab:compute}.
+Except for the deeper search reported in Section~\ref{sec:pgn}, which
+ran on an institute GPU server, all experiments were run on a
+workstation with an NVIDIA RTX 3060 Ti (8\,GB VRAM, compute capability
+8.6) under Windows 11, using the CUDA 12 toolkit, cuDNN 9.21 and the
+Visual Studio 2022 Build Tools. Python is 3.12 in a local virtual
+environment and PyTorch is the \texttt{cu124} wheel. The remaining
+Python dependencies are \texttt{networkx}, \texttt{scikit-learn},
+\texttt{python-chess}, \texttt{numpy} and \texttt{requests}. Total
+wall-clock compute is below fifteen minutes of GPU time on this
+workstation, plus roughly twenty minutes on the institute server for
+the deeper search; a per-stage breakdown is given in
+Table~\ref{tab:compute}.
 
 \begin{table}[h]
   \centering\small
@@ -244,8 +250,8 @@ time; a per-stage breakdown is given in Table~\ref{tab:compute}.
 
 \begin{table}[h]
   \centering\small
-  \caption{Per-stage compute cost on an RTX 3060 Ti, and
-    extrapolation to the paper's training set. Tree generation
+  \caption{Per-stage compute cost (on the RTX 3060 Ti unless noted)
+    and extrapolation to the paper's training set. Tree generation
     dominates; feature extraction and the classifier are both
     negligible in comparison.}
   \label{tab:compute}
@@ -259,6 +265,7 @@ time; a per-stage breakdown is given in Table~\ref{tab:compute}.
     \midrule
     My custom PGN (5 moves)                            & 68\,s        & measured wall-clock \\
     Demo fixture (2 moves)                             & pre-generated & supplied with the repo \\
+    Deeper search on 24.Rxd4 ($10^5$--$10^7$ nodes)    & $\approx$20\,min & institute GV100, Section~\ref{sec:pgn} \\
     Paper's training set (4\,057 moves, extrapolated)  & 0.7--2.8 days & depending on position depth \\
     \bottomrule
   \end{tabular}
@@ -324,6 +331,7 @@ establishes that the trees entering the classifier are produced by a
 locally compiled engine rather than by a supplied binary.
 
 \subsection{An independently constructed PGN}
+\label{sec:pgn}
 
 To establish that the pipeline is not merely satisfying a fixture
 test, I assembled a small PGN containing two well-known games:
@@ -347,8 +355,8 @@ Retaining dropout at inference and performing $N = 500$ stochastic
 forward passes per position, the Monte-Carlo dropout approximation to
 the posterior predictive distribution \citep{gal2016dropout}, yields
 the mean and standard deviation of the ``Brilliant'' probability
-reported in Table~\ref{tab:five}. All figures below use the corrected
-scaler described in Section~\ref{sec:bug3}.
+reported in Table~\ref{tab:five}. All classifier outputs below use the
+corrected scaler described in Section~\ref{sec:bug3}.
 
 \begin{table}[h]
 \centering\small
@@ -427,24 +435,24 @@ either way.
 
 Whether a larger node budget would move the prediction to
 \emph{Brilliant} splits into two questions. The engine-level half is
-answerable with a single deeper search, which I ran on institute
-hardware (an independent Linux build of \texttt{lc0} with the same
+answerable with a single deeper search, which I ran on the institute's
+GPU server (an independent Linux build of \texttt{lc0} with the same
 T82 weights, smart pruning disabled so that the full budget is spent;
 one GV100, roughly 20 GPU-minutes in total). At $10^5$, $10^6$ and
 $10^7$ nodes the $Q$ of 24.Rxd4 is $-0.098$, $-0.086$ and $-0.074$,
 with the predicted draw share rising to $0.77$; the values differ
-slightly from Table~\ref{tab:kasparov} because early stopping is
-disabled. The evaluation converges towards a balanced, drawish
-assessment rather than becoming decisive, and each tenfold budget
-increase buys less. This is consistent with published analysis
-suggesting the sacrifice was objectively defensible, and it sharpens
-the premise of the paper on its own showcase example: the perceived
-brilliance of this move is not recoverable from the evaluation at any
-feasible depth. The classifier-level half of the question remains
-open for a structural reason: the network consumes exactly five node
-budgets, so a sixth cannot be appended without retraining, and
-shifting the ladder to $10^2$--$10^6$ would feed the pretrained
-weights inputs outside their training distribution.
+slightly from Table~\ref{tab:kasparov}, whose trees come from the
+Windows build with default early stopping. The evaluation converges
+towards a balanced, drawish assessment rather than becoming decisive:
+the gain per tenfold budget increase, $0.26$ and then $0.09$ over the
+early budgets in Table~\ref{tab:kasparov}, has collapsed to about
+$0.01$. This sharpens the premise of the paper on its own showcase
+example: the perceived brilliance of this move is not recoverable from
+the evaluation at any feasible depth. The classifier-level half of the
+question remains open for a structural reason: the network consumes
+exactly five node budgets, so a sixth cannot be appended without
+retraining, and shifting the ladder to $10^2$--$10^6$ would feed the
+pretrained weights inputs outside their training distribution.
 
 Table~\ref{tab:kasparov} also exposes a smaller encoding problem. At
 $10^3$ nodes the ``is the move best'' indicator is true for Maia only
@@ -774,7 +782,7 @@ I have not reproduced the reported 78.60\,\% test accuracy. Doing so
 requires the authors' training set of 4\,057 labelled moves, which is
 not publicly available keyed to the specific Lichess Studies used,
 together with between 0.7 and 2.8 GPU-days of tree generation on the
-hardware used here (Table~\ref{tab:compute}). The scores obtained under my re-fitted
+workstation used here (Table~\ref{tab:compute}). The scores obtained under my re-fitted
 scaler are also not directly comparable to the published scores; they
 converge to those values only once the scaler is fitted on the same
 training distribution. The bootstrap 95\,\% confidence interval on the
@@ -801,8 +809,9 @@ annotation community behind the original ones, at the cost of a
 different and initially smaller labelling pool. The dominant
 remaining cost is tree generation, at the
 0.7 to 2.8 GPU-days given in Table~\ref{tab:compute}; this exceeds what
-the workstation used here can absorb comfortably and is the stage that
-would benefit from institutional compute resources.
+the workstation used here can absorb comfortably, and it is the stage
+for which the institute server access already used in
+Section~\ref{sec:pgn} will be employed.
 
 \section{Conclusion}
 

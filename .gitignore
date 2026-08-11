@@ -43,3 +43,4 @@ moves_subset/
 *.toc
 *.pdf
 !REPORT.pdf
+.DS_Store
